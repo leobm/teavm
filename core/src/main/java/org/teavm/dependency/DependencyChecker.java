@@ -17,7 +17,6 @@ package org.teavm.dependency;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -25,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import org.objectweb.asm.tree.ClassNode;
 import org.teavm.callgraph.CallGraph;
 import org.teavm.callgraph.DefaultCallGraph;
 import org.teavm.callgraph.DefaultCallGraphNode;
@@ -52,11 +52,8 @@ import org.teavm.model.ValueType;
 import org.teavm.model.util.ModelUtils;
 import org.teavm.model.util.ProgramUtils;
 import org.teavm.optimization.UnreachableBasicBlockEliminator;
+import org.teavm.parsing.Parser;
 
-/**
- *
- * @author Alexey Andreev
- */
 public class DependencyChecker implements DependencyInfo {
     static final boolean shouldLog = System.getProperty("org.teavm.logDependencies", "false").equals("true");
     private int classNameSuffix;
@@ -71,14 +68,13 @@ public class DependencyChecker implements DependencyInfo {
     private ServiceRepository services;
     private Queue<Runnable> tasks = new ArrayDeque<>();
     List<DependencyType> types = new ArrayList<>();
-    Map<String, DependencyType> typeMap = new HashMap<>();
+    private Map<String, DependencyType> typeMap = new HashMap<>();
     private DependencyCheckerInterruptor interruptor;
     private boolean interrupted;
     private Diagnostics diagnostics;
     DefaultCallGraph callGraph = new DefaultCallGraph();
     private DependencyAgent agent;
     List<DependencyNode> nodes = new ArrayList<>();
-    List<BitSet> typeBitSets = new ArrayList<>();
     Map<MethodReference, BootstrapMethodSubstitutor> bootstrapMethodSubstitutors = new HashMap<>();
     private boolean completing;
 
@@ -105,7 +101,7 @@ public class DependencyChecker implements DependencyInfo {
             return createFieldNode(preimage, field);
         });
 
-        classCache = new CachedMapper<>(preimage -> createClassDependency(preimage));
+        classCache = new CachedMapper<>(this::createClassDependency);
 
         agent = new DependencyAgent(this);
     }
@@ -131,14 +127,13 @@ public class DependencyChecker implements DependencyInfo {
         if (type == null) {
             type = new DependencyType(this, name, types.size());
             types.add(type);
-            typeBitSets.add(new BitSet(nodes.size()));
             typeMap.put(name, type);
         }
         return type;
     }
 
     public DependencyNode createNode() {
-        DependencyNode node = new DependencyNode(this, nodes.size());
+        DependencyNode node = new DependencyNode(this);
         nodes.add(node);
         return node;
     }
@@ -155,6 +150,14 @@ public class DependencyChecker implements DependencyInfo {
 
     public String generateClassName() {
         return "$$teavm_generated_class$$" + classNameSuffix++;
+    }
+
+    public String submitClassFile(byte[] data) {
+        ClassNode node = new ClassNode();
+        org.objectweb.asm.ClassReader reader = new org.objectweb.asm.ClassReader(data);
+        reader.accept(node, 0);
+        submitClass(Parser.parseClass(node));
+        return node.name;
     }
 
     public void submitClass(ClassHolder cls) {
@@ -302,15 +305,16 @@ public class DependencyChecker implements DependencyInfo {
     private Set<MethodReference> methodsAddedByRoot = new HashSet<>();
 
     public MethodDependency linkMethod(MethodReference methodRef, CallLocation callLocation) {
-        if (completing && getMethod(methodRef) == null) {
-            throw new IllegalStateException("Can't submit class during completion phase");
-        }
         if (methodRef == null) {
             throw new IllegalArgumentException();
         }
         MethodReader methodReader = methodReaderCache.map(methodRef);
         if (methodReader != null) {
             methodRef = methodReader.getReference();
+        }
+
+        if (completing && getMethod(methodRef) == null) {
+            throw new IllegalStateException("Can't submit class during completion phase");
         }
         callGraph.getNode(methodRef);
         boolean added = true;

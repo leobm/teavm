@@ -329,11 +329,11 @@ class JSClassProcessor {
         }
 
         if (method.getProgram() != null && method.getProgram().basicBlockCount() > 0) {
-            MethodReader overriden = getOverridenMethod(method);
-            if (overriden != null) {
+            MethodReader overridden = getOverridenMethod(method);
+            if (overridden != null) {
                 diagnostics.error(callLocation, "JS final method {{m0}} overrides {{m1}}. "
                         + "Overriding final method of overlay types is prohibited.",
-                        method.getReference(), overriden.getReference());
+                        method.getReference(), overridden.getReference());
             }
             if (method.getProgram() != null && method.getProgram().basicBlockCount() > 0) {
                 invoke.setMethod(new MethodReference(method.getOwnerName(), method.getName() + "$static",
@@ -356,6 +356,34 @@ class JSClassProcessor {
 
     private boolean processJSBodyInvocation(MethodReader method, CallLocation callLocation, InvokeInstruction invoke,
             MethodHolder methodToProcess) {
+        boolean valid = true;
+        for (int i = 0; i < method.parameterCount(); ++i) {
+            ValueType arg = method.parameterType(i);
+            if (!typeHelper.isSupportedType(arg)) {
+                diagnostics.error(callLocation, "Method {{m0}} is not a proper native JavaScript method "
+                        + " declaration. Its parameter #" + (i + 1) + " has invalid type {{t1}}", invoke.getMethod(),
+                        arg);
+                valid = false;
+            }
+        }
+        if (invoke.getInstance() != null) {
+            if (!typeHelper.isSupportedType(ValueType.object(method.getOwnerName()))) {
+                diagnostics.error(callLocation, "Method {{m0}} is not a proper native JavaScript method "
+                        + " declaration. It is non-static and declared on a non-overlay class {{c1}}",
+                        invoke.getMethod(), method.getOwnerName());
+                valid = false;
+            }
+        }
+        if (method.getResultType() != ValueType.VOID && !typeHelper.isSupportedType(method.getResultType())) {
+            diagnostics.error(callLocation, "Method {{m0}} is not a proper native JavaScript method "
+                    + " declaration, since it returns invalid type {{t1}}", invoke.getMethod(),
+                    method.getResultType());
+            valid = false;
+        }
+        if (!valid) {
+            return false;
+        }
+
         requireJSBody(diagnostics, method);
         MethodReference delegate = repository.methodMap.get(method.getReference());
         if (delegate == null) {
@@ -517,7 +545,7 @@ class JSClassProcessor {
         int jsParamCount = bodyAnnot.getValue("params").getList().size();
         if (methodToProcess.parameterCount() != jsParamCount) {
             diagnostics.error(location, "JSBody method {{m0}} declares " + methodToProcess.parameterCount()
-                    + " parameters, but annotation specifies " + jsParamCount, methodToProcess);
+                    + " parameters, but annotation specifies " + jsParamCount, methodToProcess.getReference());
             return;
         }
 
@@ -526,11 +554,8 @@ class JSClassProcessor {
         if (!isStatic) {
             ++paramCount;
         }
-        ValueType[] paramTypes = new ValueType[paramCount];
-        int offset = 0;
         if (!isStatic) {
             ValueType paramType = ValueType.object(methodToProcess.getOwnerName());
-            paramTypes[offset++] = paramType;
             if (!typeHelper.isSupportedType(paramType)) {
                 diagnostics.error(location, "Non-static JSBody method {{m0}} is owned by non-JS class {{c1}}",
                         methodToProcess.getReference(), methodToProcess.getOwnerName());
@@ -543,9 +568,6 @@ class JSClassProcessor {
         }
 
         // generate parameter types for proxy method
-        for (int i = 0; i < methodToProcess.parameterCount(); ++i) {
-            paramTypes[offset++] = methodToProcess.parameterType(i);
-        }
         ValueType[] proxyParamTypes = new ValueType[paramCount + 1];
         for (int i = 0; i < paramCount; ++i) {
             proxyParamTypes[i] = ValueType.parse(JSObject.class);
@@ -559,8 +581,8 @@ class JSClassProcessor {
                 methodToProcess.getName() + "$js_body$_" + methodIndexGenerator++, proxyParamTypes);
         String script = bodyAnnot.getValue("script").getString();
         String[] parameterNames = bodyAnnot.getValue("params").getList().stream()
-                .map(ann -> ann.getString())
-                .toArray(sz -> new String[sz]);
+                .map(AnnotationValue::getString)
+                .toArray(String[]::new);
 
         // Parse JS script
         TeaVMErrorReporter errorReporter = new TeaVMErrorReporter(diagnostics,
@@ -570,15 +592,13 @@ class JSClassProcessor {
         env.setLanguageVersion(Context.VERSION_1_8);
         env.setIdeMode(true);
         JSParser parser = new JSParser(env, errorReporter);
-        //parser.enterFunction();
         AstRoot rootNode;
         try {
             rootNode = parser.parse(new StringReader("function(){" + script + "}"), null, 0);
         } catch (IOException e) {
-            throw new RuntimeException("IO Error occured", e);
+            throw new RuntimeException("IO Error occurred", e);
         }
         AstNode body = ((FunctionNode) rootNode.getFirstChild()).getBody();
-        //parser.exitFunction();
 
         repository.methodMap.put(methodToProcess.getReference(), proxyMethod);
         if (errorReporter.hasErrors()) {

@@ -148,11 +148,11 @@ public class ProgramParser implements VariableDebugInformation {
 
     private int popDouble() {
         if (stack == null || stack.type != DOUBLE_SECOND_HALF) {
-            throw new AssertionError("Illegal stack state at " + index);
+            throw new AssertionError("***Illegal stack state at " + index);
         }
         stack = stack.next;
         if (stack == null || stack.type != DOUBLE_FIRST_HALF) {
-            throw new AssertionError("Illegal stack state at " + index);
+            throw new AssertionError("***Illegal stack state at " + index);
         }
         int depth = stack.depth;
         stack = stack.next;
@@ -193,8 +193,8 @@ public class ProgramParser implements VariableDebugInformation {
             vars.add(localVar);
         }
         targetInstructions = new ArrayList<>(instructions.size());
-        targetInstructions.addAll(Collections.<List<Instruction>>nCopies(instructions.size(), null));
-        basicBlocks.addAll(Collections.<BasicBlock>nCopies(instructions.size(), null));
+        targetInstructions.addAll(Collections.nCopies(instructions.size(), null));
+        basicBlocks.addAll(Collections.nCopies(instructions.size(), null));
         stackBefore = new StackFrame[instructions.size()];
         stackAfter = new StackFrame[instructions.size()];
     }
@@ -287,7 +287,7 @@ public class ProgramParser implements VariableDebugInformation {
             List<LocalVariableNode> localVarNodes = localVariableMap.get(i);
             if (localVarNodes != null) {
                 if (builtInstructions == null || builtInstructions.isEmpty()) {
-                    builtInstructions = Arrays.<Instruction>asList(new EmptyInstruction());
+                    builtInstructions = Arrays.asList(new EmptyInstruction());
                 }
                 Map<Integer, String> debugNames = new HashMap<>();
                 variableDebugNames.put(builtInstructions.get(0), debugNames);
@@ -1047,6 +1047,7 @@ public class ProgramParser implements VariableDebugInformation {
                 case Opcodes.POP2:
                     if (stack.type == SINGLE) {
                         popSingle();
+                        popSingle();
                     } else {
                         popDouble();
                     }
@@ -1679,11 +1680,6 @@ public class ProgramParser implements VariableDebugInformation {
                 case Opcodes.GETSTATIC: {
                     ValueType type = ValueType.parse(desc);
                     int value = desc.equals("D") || desc.equals("J") ? pushDouble() : pushSingle();
-                    if (!owner.equals(currentClassName)) {
-                        InitClassInstruction initInsn = new InitClassInstruction();
-                        initInsn.setClassName(ownerCls);
-                        addInstruction(initInsn);
-                    }
                     GetFieldInstruction insn = new GetFieldInstruction();
                     insn.setField(new FieldReference(ownerCls, name));
                     insn.setFieldType(type);
